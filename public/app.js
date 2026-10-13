@@ -102,6 +102,7 @@
   // ---------------------------------------------------------------- home
   async function openHome() {
     state.current = null;
+    clearInterval(countdownTimer);
     $("#view-run").classList.add("hidden"); $("#view-home").classList.remove("hidden");
     document.title = "researchr: know who you're meeting";
     try { await refreshRuns(); } catch (e) { /* offline: keep the form usable */ }
@@ -251,6 +252,19 @@
   const ORDER = PHASES.flatMap((p) => p.stages);
   let seenNotes = new Set(), seenRun = null;
 
+  let countdownTimer = null;
+  function startCountdown(until, message) {
+    clearInterval(countdownTimer);
+    if (!until) return;
+    const tick = () => {
+      const left = Math.max(0, Math.round(until - Date.now() / 1000));
+      $("#pmsg").textContent = left > 0
+        ? `Paused: the free AI quota ran out. Resuming in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`
+        : "Resuming";
+    };
+    tick(); countdownTimer = setInterval(tick, 1000);
+  }
+
   function renderLive(r) {
     const L = r.live || {}, c = L.counts || {}, stage = L.stage || "identity";
     const at = ORDER.indexOf(stage);
@@ -270,19 +284,23 @@
       return `<li class="phase ${cls}" ${cls === "active" ? 'aria-current="step"' : ""}><span class="ph-name">${p.name}</span><span class="ph-n">${cls ? esc(phaseCount[i]) : ""}</span></li>`;
     }).join("");
 
+    $("#progress").classList.toggle("paused", paused);
+    startCountdown(paused ? r.lease_until : 0, r.message);
     $("#live-foot").textContent = paused
       ? "Paused runs pick up again when this page is open, so check back in a few minutes."
       : "It keeps going if you leave. You'll find it under Your people.";
     $("#pbar-fill").style.width = `${Math.max(3, r.pct || 0)}%`;
-    $("#pmsg").textContent = r.stage === "queued" ? "Waiting for a free slot" : paused ? r.message : (r.message || "Getting started");
+    if (!paused) $("#pmsg").textContent = r.stage === "queued" ? "Waiting for a free slot" : (r.message || "Getting started");
 
     // who we think this is
     const id = L.identity;
     $("#who-conf").innerHTML = id ? `<b>${pct(id.confidence)}</b> sure it's them` : "";
+    $("#who-body").classList.toggle("has-clues", !!(id && id.clues?.length));
     if (id) {
-      $("#who-body").innerHTML = `<div class="who-name">${esc(id.name)}</div>
-        <div class="who-role">${esc([id.role, id.org].filter(Boolean).join(" at "))}${id.location ? `, ${esc(id.location)}` : ""}</div>
-        ${id.clues?.length ? `<div class="who-clues">${id.clues.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
+      $("#who-body").innerHTML = `<div><div class="who-name">${esc(id.name)}</div>
+          <div class="who-role">${esc([id.role, id.org].filter(Boolean).join(" at ")) || "&nbsp;"}</div>
+          ${id.location ? `<div class="who-where">${esc(id.location)}</div>` : ""}</div>
+        ${id.clues?.length ? `<ul class="who-clues" aria-label="How we recognised them">${id.clues.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         ${id.ambiguous ? `<div class="who-warn">There may be more than one person with this name. ${esc(id.note)}</div>` : ""}`;
     } else {
       const q = L.queries?.recent?.[0];
@@ -292,7 +310,7 @@
 
     // notes: new ones get inked onto their line
     if (seenRun !== r.id) { seenNotes = new Set(); seenRun = r.id; }
-    const notes = L.notes || [];
+    const notes = (L.notes || []).slice(0, 8);
     $("#feed-count").textContent = c.facts ? `${c.facts} verified` : c.raw_facts ? `${c.raw_facts} collected` : "";
     $("#feed").innerHTML = notes.length ? notes.map((n) => {
       const fresh = !seenNotes.has(n.text);
@@ -303,12 +321,17 @@
     notes.forEach((n) => seenNotes.add(n.text));
 
     // sources: namesakes get struck through once they're ruled out
-    $("#src-count").textContent = c.sources ? (c.ruled_out ? `${c.ruled_out} of ${c.sources} ruled out` : `${c.sources}`) : "";
-    $("#desk").innerHTML = (L.sources || []).map((s) => {
+    const shown = (L.sources || []).slice(0, 12);
+    $("#src-count").textContent = c.sources ? `${c.sources} found` : "";
+    $("#desk").innerHTML = shown.map((s) => {
       const st = s.out ? "not them" : s.read ? "read" : s.p != null ? `${pct(s.p)} match` : "found";
-      return `<li class="${s.out ? "out" : ""}"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.t)}"><b>${esc(s.d)}</b> <span>${esc(s.t)}</span></a>
+      return `<li class="${s.out ? "out" : ""}"><a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.t)}">
+        <span class="sd">${esc(s.d)}</span><span class="stt">${esc(s.t || s.url)}</span></a>
         <span class="st ${s.read ? "read" : ""}">${st}</span></li>`;
     }).join("") || `<li><span class="who-wait">Nothing yet.</span></li>`;
+    const more = (c.sources || 0) - shown.length;
+    $("#desk-more").textContent = more > 0
+      ? `And ${more} more.${c.ruled_out ? ` ${c.ruled_out} sources were ruled out as other people with the same name.` : ""}` : "";
 
     // portrait taking shape
     const shape = L.insights || [], reads = L.reads || [];

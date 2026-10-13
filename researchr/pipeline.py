@@ -406,7 +406,25 @@ class ResearchAgent:
         for n, f in enumerate(facts, 1):
             f.id = f"F{n}"
         self.st["facts"] = [f.model_dump() for f in facts]
+        self._refresh_identity(facts)
         self._go("infer", f"{len(facts)} facts · drawing inferences")
+
+    def _refresh_identity(self, facts: list[Fact]) -> None:
+        """Snippet-based guesses can be stale or wrong; prefer strong, page-verified career/location facts."""
+        i = self.identity
+        surname = i.canonical_name.split()[-1].lower()
+        strong = [f for f in facts if f.confidence >= 0.8 and surname in f.statement.lower()]
+        for f in strong:  # "X is the Head of Engineering at Revin." -> role, org (present tense = current)
+            m = re.search(r"\b(?:is|serves as|works as)\s+(?:the |a |an )?(.{3,60}?)\s+at\s+([A-Z][\w&.\- ]{1,40}?)[.,]?$",
+                          f.statement)
+            if f.category == "career" and m:
+                i.current_role, i.org = m.group(1).strip(), m.group(2).strip()
+                break
+        for f in strong:
+            m = re.search(r"\b(?:is based|is located|lives) in ([A-Z][\w.\- ]+(?:, [A-Z][\w.\- ]+){0,2})", f.statement)
+            if m:
+                i.location = m.group(1).strip().rstrip(".")
+                break
 
     def _s_infer(self) -> None:
         facts = self._facts()
@@ -596,7 +614,8 @@ class ResearchAgent:
             i = self.identity
             ident = {"name": i.canonical_name, "role": i.current_role, "org": i.org, "location": i.location,
                      "confidence": i.confidence, "ambiguous": i.ambiguous, "note": _clip(i.ambiguity_note, 160),
-                     "clues": [_clip(d, 60) for d in i.disambiguators[:4]]}
+                     "clues": [_clip(d, 48) for d in i.disambiguators
+                               if not re.search(r"https?://|www\.|linkedin\.com/in", d)][:4]}
         srcs = list(self.sources.values())
         recent = srcs[-18:][::-1] if not triaged else sorted(
             srcs, key=lambda s: (s.fetched, s.p_same_person), reverse=True)[:18]

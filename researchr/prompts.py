@@ -25,7 +25,10 @@ Return JSON:
   "ambiguous": bool (true if results show 2+ different people and hints don't settle it),
   "ambiguity_note": str (who the other people are, briefly),
   "confidence": 0-1 (how sure you are the anchor is the intended person)}}
-Prefer the person matching the hints. If no hints, prefer the most prominent professional match."""
+Prefer the person matching the hints. If no hints, prefer the most prominent professional match.
+Only fill current_role, org and location with what a result explicitly states; prefer the most recent
+role; leave a field "" rather than guess (a company name is not a location). Disambiguators are short
+facts in plain words, never URLs."""
 
 QUERY_PLAN = """Plan web searches to research a person before a meeting. {ethics}
 Person: {anchor}
