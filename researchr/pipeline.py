@@ -420,7 +420,13 @@ class ResearchAgent:
             if f.category == "career" and m:
                 i.current_role, i.org = m.group(1).strip(), m.group(2).strip()
                 break
-        for f in strong:
+        # a "location" that just repeats the company name (Revin -> "Revin, France") is a misread; drop it and
+        # accept a moderately supported location fact instead
+        suspect = bool(i.org) and i.org.split()[0].lower() in (i.location or "").lower()
+        if suspect:
+            i.location = ""
+        pool = strong if not suspect else [f for f in facts if f.confidence >= 0.5 and surname in f.statement.lower()]
+        for f in pool:
             m = re.search(r"\b(?:is based|is located|lives) in ([A-Z][\w.\- ]+(?:, [A-Z][\w.\- ]+){0,2})", f.statement)
             if m:
                 i.location = m.group(1).strip().rstrip(".")
