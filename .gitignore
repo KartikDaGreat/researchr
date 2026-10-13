@@ -1,0 +1,16 @@
+# secrets
+.env*
+firecrawl.env
+
+# local data, caches, reports
+data/
+.firecrawl/
+__pycache__/
+*.pyc
+
+# personal profile: deployed from your machine, never committed (see profile/me.example.json)
+profile/me.json
+*.pdf
+
+# vercel
+.vercel

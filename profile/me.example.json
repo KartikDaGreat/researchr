@@ -1,0 +1,14 @@
+{
+  "name": "Your Name",
+  "headline": "What you do, in one line",
+  "location": "City, Country",
+  "summary": "Two sentences about your work and what you're looking for.",
+  "orgs": ["Current company", "Previous company", "University lab"],
+  "schools": ["Your university"],
+  "cities": ["Cities you've lived or worked in"],
+  "skills": ["Python", "TypeScript"],
+  "topics": ["Themes you work on"],
+  "interests": ["Hobbies or causes"],
+  "publications": [],
+  "notable": ["Awards, talks, patents"]
+}

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#DCE3E9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12171D" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Research anyone's public professional footprint before you meet them, then sort the findings like index cards.">
+<title>researchr: know who you're meeting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;1,7..72,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ Home ============ -->
+  <main id="view-home" class="view">
+    <header class="bar">
+      <a class="wordmark" href="#">researchr</a>
+    </header>
+
+    <form id="new-form" class="index-card hero-card" autocomplete="off" novalidate>
+      <label class="card-head" for="f-name">
+        <span class="head-prompt">Who are you meeting?</span>
+        <input id="f-name" name="name" required maxlength="120" placeholder="Their full name" enterkeyhint="next">
+      </label>
+      <div class="ruled">
+        <label class="line"><span class="line-label">What pins them down</span>
+          <input name="hints" maxlength="400" placeholder="Company, role, city or a profile link"></label>
+        <label class="line"><span class="line-label">What you want from it</span>
+          <input name="goal" maxlength="400" placeholder="Optional, e.g. ask about joining their team"></label>
+        <details class="about">
+          <summary>Tell it about you, to find common ground</summary>
+          <textarea name="me" rows="4" maxlength="2500" placeholder="A few lines about your work, school, city and interests. Saved on this device only."></textarea>
+        </details>
+        <div class="form-foot">
+          <p class="form-note" id="form-note">Public, professional information only. Not for looking up private individuals.</p>
+          <button class="btn-ink" type="submit" id="btn-start">Start research</button>
+        </div>
+        <p class="form-error hidden" id="form-error" role="alert"></p>
+      </div>
+    </form>
+    <p class="legal" id="legal">Takes about five minutes. This site is protected by reCAPTCHA and the Google
+      <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy Policy</a> and
+      <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms of Service</a> apply.</p>
+
+    <section class="people" aria-labelledby="people-h">
+      <h2 id="people-h">Your people</h2>
+      <ul id="run-list" class="run-list"></ul>
+      <p id="empty-people" class="empty-note hidden">People you research show up here, on this device.</p>
+    </section>
+  </main>
+
+  <!-- ============ One person ============ -->
+  <main id="view-run" class="view hidden">
+    <header class="bar run-bar">
+      <button class="icon-btn" id="btn-back" aria-label="Back to your people">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="run-id"><h1 id="run-name"></h1><p id="run-sub"></p></div>
+      <button class="icon-btn" id="btn-del" aria-label="Delete this research">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
+
+    <nav class="seg" role="tablist" aria-label="Views">
+      <button role="tab" data-tab="triage" class="active">Sort <span id="cnt-pending" class="count"></span></button>
+      <button role="tab" data-tab="brief">Brief <span id="cnt-kept" class="count"></span></button>
+      <button role="tab" data-tab="report">Report</button>
+    </nav>
+
+    <!-- research in progress: watch the card index get written -->
+    <section id="progress" class="live hidden">
+      <ol class="phases" id="phases" aria-label="Research steps"></ol>
+      <article class="index-card who-card">
+        <div class="card-head who-head">
+          <span class="head-prompt" id="pmsg">Starting</span>
+          <span class="who-conf" id="who-conf"></span>
+        </div>
+        <div class="ink-rule"><span id="pbar-fill"></span></div>
+        <div class="ruled who-body" id="who-body"></div>
+      </article>
+
+      <article class="index-card shape-card hidden" id="shape">
+        <div class="card-head"><span class="head-prompt">Portrait taking shape</span></div>
+        <div class="ruled"><ul class="shape" id="shape-list"></ul><ul class="reads" id="reads"></ul></div>
+      </article>
+      <div class="live-grid">
+        <article class="index-card feed-card">
+          <div class="card-head"><span class="head-prompt">Notes so far</span><span class="head-count" id="feed-count"></span></div>
+          <ol class="ruled feed" id="feed" aria-live="polite"></ol>
+        </article>
+        <article class="index-card desk-card">
+          <div class="card-head"><span class="head-prompt">Sources found</span><span class="head-count" id="src-count"></span></div>
+          <div class="ruled"><ul class="desk" id="desk"></ul></div>
+        </article>
+      </div>
+
+      <p class="live-foot">It keeps going if you leave. You'll find it under Your people.</p>
+    </section>
+    <section id="error" class="index-card error-card hidden" role="alert">
+      <div class="card-head"><span class="head-prompt">This research stopped</span></div>
+      <div class="ruled"><p id="error-text"></p></div>
+    </section>
+
+    <section id="tab-triage" class="tab">
+      <div id="stack" class="stack" aria-live="polite"></div>
+      <div id="done-msg" class="index-card done-card hidden">
+        <div class="card-head"><span class="head-prompt">Deck sorted</span></div>
+        <div class="ruled"><p>Everything you kept is waiting in your brief.</p>
+          <button class="btn-ink" data-goto="brief">Open brief</button></div>
+      </div>
+      <div class="piles" id="piles">
+        <button class="pile keep" id="a-keep" aria-label="Keep this card">
+          <span class="pile-stack" aria-hidden="true"></span><span class="pile-name">Keep</span><span class="pile-n" id="n-keep">0</span>
+        </button>
+        <button class="undo" id="a-undo" aria-label="Undo last">Undo</button>
+        <button class="pile skip" id="a-skip" aria-label="Set this card aside">
+          <span class="pile-stack" aria-hidden="true"></span><span class="pile-name">Set aside</span><span class="pile-n" id="n-skip">0</span>
+        </button>
+      </div>
+      <p class="hint">Drag a card left to keep it, right to set it aside.</p>
+    </section>
+
+    <section id="tab-brief" class="tab hidden"><div id="brief"></div></section>
+
+    <section id="tab-report" class="tab hidden">
+      <div class="report-actions"><a id="dl-md" class="btn-line" href="#">Download notes</a><a id="open-html" class="btn-line" target="_blank" rel="noopener" href="#">Open full page</a></div>
+      <iframe id="report-frame" title="Full report"></iframe>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
