@@ -29,8 +29,11 @@ _load_env_file(ROOT / ".env.local")
 _load_env_file(ROOT / ".env")
 
 GROQ_KEYS = [k for k in (os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY_2")) if k]
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-# Free tier for gpt-oss-20b is 8K tokens/min per key; keep a safety margin.
+# Tried in order; each model has its own free-tier quota per Groq account (8K tokens/min, 200K/day),
+# so stepping down a model when one is used up keeps a run going.
+GROQ_MODELS = [m.strip() for m in os.getenv(
+    "GROQ_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b").split(",") if m.strip()]
+# Per (account, model) tokens/min on the free tier; keep a safety margin.
 GROQ_TPM = int(os.getenv("GROQ_TPM", "8000"))
 GROQ_TPM_SAFETY = float(os.getenv("GROQ_TPM_SAFETY", "0.85"))
 
@@ -48,10 +51,11 @@ PAGE_CHAR_BUDGET = int(os.getenv("PAGE_CHAR_BUDGET", "9000"))
 STEP_SECONDS = int(os.getenv("STEP_SECONDS", "200"))
 
 # Public mode: anyone can use the site; these protect the shared (free-tier) Groq + Firecrawl budget.
-RUNS_PER_USER_PER_DAY = int(os.getenv("RUNS_PER_USER_PER_DAY", "2"))
-RUNS_PER_IP_PER_DAY = int(os.getenv("RUNS_PER_IP_PER_DAY", "3"))
-# a run uses ~80-110K Groq tokens; the free tier allows 200K/day per key, so 2 keys ~ 4 runs/day
-RUNS_PER_DAY_TOTAL = int(os.getenv("RUNS_PER_DAY_TOTAL", "4"))
+RUNS_PER_USER_PER_DAY = int(os.getenv("RUNS_PER_USER_PER_DAY", "3"))
+RUNS_PER_IP_PER_DAY = int(os.getenv("RUNS_PER_IP_PER_DAY", "4"))
+# a run uses ~80-110K Groq tokens; free tier = 200K/day per account per model.
+# 2 accounts x 3 models = 1.2M tokens/day ~ 12 runs/day
+RUNS_PER_DAY_TOTAL = int(os.getenv("RUNS_PER_DAY_TOTAL", "12"))
 MAX_ACTIVE_RUNS = int(os.getenv("MAX_ACTIVE_RUNS", "2"))
 RECAPTCHA_SITE_KEY = os.getenv("RECAPTCHA_SITE_KEY", "")
 RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET", "")

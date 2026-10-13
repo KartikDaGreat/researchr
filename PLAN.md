@@ -8,7 +8,7 @@ Given a person's name (plus optional details and a meeting goal), researchr coll
 
 | Constraint | Consequence |
 |---|---|
-| LLM is Groq `openai/gpt-oss-20b` on the free tier: **8K tokens/min and 200K tokens/day per key**, 2 keys | Per-key token bucket with rotation, compact prompts, and a "focus window" that sends only page text near mentions of the person. A run uses ~80–110K tokens, so the free tier supports **about 4 runs a day**. Public limits are set to match. When the daily cap is hit, the run pauses and resumes later instead of failing. |
+| LLM is Groq's free tier: **8K tokens/min and 200K tokens/day per account, per model**, refilling continuously (~8.3K/hour). 2 accounts | Each account × model pair is a separate "lane" with its own token bucket. Calls go to the best model with quota left (`gpt-oss-120b` → `gpt-oss-20b` → `qwen3.8-27b`) and the least-busy account within it. A model is skipped only when it hits its daily cap on every account, not for per-minute blips. Compact prompts and a "focus window" (page text near mentions only) keep a run at ~80–110K tokens, so the free tier supports **about 12 runs a day**. Only if every lane is out does a run pause, and it resumes later. |
 | A 20B model hallucinates more than frontier models | Every fact carries a **verbatim evidence quote**, and code checks it against the page. Probabilities are computed in code from evidence, not taken from the model. |
 | Vercel Hobby functions stop after 300s; a run takes 5+ minutes | The agent is a **resumable state machine**. Each step is one bounded unit, state is JSON in a private Vercel Blob store, and each invocation works ≤200s and then chains to the next. |
 | Firecrawl credits are scarce (~1,000/month) | **Tiered search.** Identity seeds use Firecrawl (snippets matter there). Coverage queries use Groq's built-in `browser_search`, falling back to Firecrawl when that comes back nearly empty. Pages are fetched via cache → GitHub API → plain HTTP → Firecrawl (only for high-value pages, max 3 per run). A 7-day cache makes re-runs nearly free. Typical cost: 0–6 credits per run. |
@@ -61,7 +61,7 @@ Summary and tags → game plan → portrait → common ground → conversation t
 ```
 researchr/
   config.py     settings, limits, Vercel detection
-  llm.py        Groq client: key rotation, token bucket, JSON mode, quota pause, browser_search
+  llm.py        Groq client: key x model lanes, failover, token buckets, JSON mode, quota pause, browser_search
   search.py     tiered search + fetch, cache, GitHub API, focus window
   pipeline.py   the resumable state machine + live snapshot
   scoring.py    reliability priors, noisy-OR, calibration, sensitive filters, quote check

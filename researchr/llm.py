@@ -1,14 +1,17 @@
-"""Groq chat client with key rotation, a per-key token bucket and JSON-mode retries.
+"""Groq chat client that keeps a run going across keys AND models.
 
-Free-tier gpt-oss-20b allows ~8K tokens/minute per key, so every call reserves an
-estimated token budget against a sliding 60s window before it is sent.
+Groq's free tier limits each (organization, model) pair separately: 8K tokens/min and 200K tokens/day,
+refilling continuously. So every key x model combination is its own "lane" with its own budget.
+Calls go to the best model that still has quota (GROQ_MODELS order: gpt-oss-120b, then gpt-oss-20b,
+then qwen), and to the least-busy key within it. A model is only skipped when it is blocked for minutes
+on every key (the daily cap), not for a per-minute blip, so quality isn't dropped needlessly.
 """
 from __future__ import annotations
 
 import json
 import os
-import sys
 import re
+import sys
 import threading
 import time
 from collections import deque
@@ -21,6 +24,8 @@ from . import config
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEBUG = os.getenv("RESEARCHR_DEBUG") == "1"
+LONG_BLOCK = 90  # seconds; a lane blocked longer than this has hit its daily cap
+TOOL_MODELS = ("gpt-oss",)  # only these support Groq's built-in browser_search
 
 
 class LLMError(RuntimeError):
@@ -28,19 +33,25 @@ class LLMError(RuntimeError):
 
 
 class QuotaExhausted(RuntimeError):
-    """Every key is rate-limited for longer than a step can wait (usually the daily token cap).
+    """Every key on every model is blocked for longer than a step can wait (the daily caps).
     Deliberately NOT an LLMError, so stages don't swallow it: the run pauses and resumes later."""
 
     def __init__(self, wait: float):
-        super().__init__(f"Groq quota exhausted; retry in {wait:.0f}s")
+        super().__init__(f"Groq quota exhausted on all models; retry in {wait:.0f}s")
         self.wait = wait
 
 
 @dataclass
-class _Key:
+class _Lane:
+    key_i: int
     key: str
-    window: deque = field(default_factory=deque)  # (timestamp, tokens)
+    model: str
+    window: deque = field(default_factory=deque)  # [timestamp, tokens] entries in the last 60s
     cooldown_until: float = 0.0
+
+    @property
+    def id(self) -> str:
+        return f"{self.key_i}|{self.model}"
 
     def used(self, now: float) -> int:
         while self.window and now - self.window[0][0] > 60:
@@ -49,153 +60,160 @@ class _Key:
 
 
 class GroqClient:
-    def __init__(self, keys: list[str] | None = None, model: str | None = None):
+    def __init__(self, keys: list[str] | None = None, models: list[str] | None = None):
         keys = keys or config.GROQ_KEYS
         if not keys:
             raise LLMError("No GROQ_API_KEY / GROQ_API_KEY_2 set (local: .env; hosted: Vercel env vars)")
-        self.keys = [_Key(k) for k in keys]
-        self.model = model or config.GROQ_MODEL
+        self.models = models or config.GROQ_MODELS
+        self.lanes = [_Lane(i, k, m) for m in self.models for i, k in enumerate(keys)]
         self.limit = int(config.GROQ_TPM * config.GROQ_TPM_SAFETY)
         self.lock = threading.Lock()
         self.http = httpx.Client(timeout=120)
         self.total_tokens = 0
         self.calls = 0
+        self.by_model: dict[str, int] = {}
 
-    # ---- persistence (so chained serverless steps respect the same per-minute window) ----
+    # ---- persistence (chained serverless steps share the same windows and cooldowns) ----
     def export_state(self) -> dict:
         with self.lock:
-            return {"windows": [[list(e) for e in k.window] for k in self.keys],
-                    "cooldowns": [k.cooldown_until for k in self.keys],
-                    "total_tokens": self.total_tokens, "calls": self.calls}
+            return {"lanes": {ln.id: {"w": [list(e) for e in ln.window], "c": ln.cooldown_until} for ln in self.lanes},
+                    "total_tokens": self.total_tokens, "calls": self.calls, "by_model": dict(self.by_model)}
 
     def import_state(self, d: dict | None) -> None:
         if not d:
             return
         now = time.time()
-        for k, w, c in zip(self.keys, d.get("windows", []), d.get("cooldowns", [])):
-            k.window = deque([list(e) for e in w if now - e[0] <= 60])
-            k.cooldown_until = c
+        saved = d.get("lanes") or {}
+        for ln in self.lanes:
+            s = saved.get(ln.id)
+            if s:
+                ln.window = deque([list(e) for e in s.get("w", []) if now - e[0] <= 60])
+                ln.cooldown_until = s.get("c", 0.0)
         self.total_tokens = d.get("total_tokens", 0)
         self.calls = d.get("calls", 0)
+        self.by_model = dict(d.get("by_model") or {})
 
-    # ---- rate limiting -------------------------------------------------
-    def _reserve(self, est: int) -> tuple[_Key, list]:
+    # ---- choosing a lane -------------------------------------------------
+    def _reserve(self, est: int, tools: bool) -> tuple[_Lane, list]:
         est = min(est, self.limit)
         while True:
             with self.lock:
                 now = time.time()
-                best = None
-                for k in self.keys:
-                    if k.cooldown_until > now:
-                        continue
-                    if k.used(now) + est <= self.limit:
-                        if best is None or k.used(now) < best.used(now):
-                            best = k
-                if best:
-                    entry = [now, est]
-                    best.window.append(entry)
-                    return best, entry
+                usable_models = [m for m in self.models if not tools or any(t in m for t in TOOL_MODELS)]
+                if not usable_models:
+                    raise LLMError("no model supports this request")
+                for model in usable_models:
+                    lanes = [ln for ln in self.lanes if ln.model == model]
+                    if all(ln.cooldown_until - now > LONG_BLOCK for ln in lanes):
+                        continue  # daily cap on every key for this model: step down to the next model
+                    free = [ln for ln in lanes if ln.cooldown_until <= now and ln.used(now) + est <= self.limit]
+                    if free:
+                        lane = min(free, key=lambda ln: ln.used(now))
+                        entry = [now, est]
+                        lane.window.append(entry)
+                        return lane, entry
+                    break  # this model is only briefly busy (per-minute limit): wait for it, keep quality
+                else:
+                    blocked = [ln for ln in self.lanes if ln.model in usable_models]
+                    raise QuotaExhausted(min(ln.cooldown_until for ln in blocked) - now)
             time.sleep(1.0)
 
-    def _settle(self, entry: list, actual: int) -> None:
+    def _settle(self, lane: _Lane, entry: list, actual: int) -> None:
         with self.lock:
             entry[1] = actual  # replace the reservation with the real usage
-            self.total_tokens += actual
-            self.calls += 1
+            if actual:
+                self.total_tokens += actual
+                self.calls += 1
+                self.by_model[lane.model] = self.by_model.get(lane.model, 0) + actual
 
     # ---- calls ---------------------------------------------------------
-    def _post(self, body: dict, est: int, need_content: bool = True) -> dict:
-        """POST with rate limiting and retries; returns the assistant message dict."""
+    @staticmethod
+    def _body(model: str, spec: dict) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": model, "messages": spec["messages"],
+                                "max_completion_tokens": spec["max_tokens"], "temperature": spec["temperature"]}
+        if "gpt-oss" in model:
+            body["reasoning_effort"] = spec["reasoning"]
+            body["include_reasoning"] = False
+        else:
+            body["reasoning_format"] = "hidden"  # e.g. qwen: think, but don't put the thinking in content
+        if spec.get("json"):
+            body["response_format"] = {"type": "json_object"}
+        if spec.get("tools"):
+            body["tools"] = spec["tools"]
+        return body
+
+    def _post(self, spec: dict, est: int, need_content: bool = True) -> dict:
+        """Send with rate limiting, key/model failover and retries; returns the assistant message."""
         last_err = ""
-        for attempt in range(6):
+        for attempt in range(8):
             t_wait = time.time()
-            k, entry = self._reserve(est)
+            lane, entry = self._reserve(est, tools=bool(spec.get("tools")))
             t_call = time.time()
             try:
-                r = self.http.post(API_URL, json=body, headers={"Authorization": f"Bearer {k.key}"})
-                if DEBUG:
-                    u = r.json().get("usage", {}) if r.status_code == 200 else {}
-                    print(f"  [groq] key{self.keys.index(k)} attempt {attempt} waited {t_call - t_wait:.0f}s, call "
-                          f"{time.time() - t_call:.0f}s -> {r.status_code} tokens={u.get('total_tokens')} "
-                          f"retry-after={r.headers.get('retry-after')} {'' if r.status_code == 200 else r.text[:160]}",
-                          file=sys.stderr, flush=True)
+                r = self.http.post(API_URL, json=self._body(lane.model, spec), headers={"Authorization": f"Bearer {lane.key}"})
             except httpx.HTTPError as e:
-                self._settle(entry, 0)
+                self._settle(lane, entry, 0)
                 last_err = str(e)
                 time.sleep(2 * (attempt + 1))
                 continue
+            if DEBUG:
+                u = r.json().get("usage", {}) if r.status_code == 200 else {}
+                print(f"  [groq] {lane.model} key{lane.key_i} attempt {attempt} waited {t_call - t_wait:.0f}s, call "
+                      f"{time.time() - t_call:.0f}s -> {r.status_code} tokens={u.get('total_tokens')} "
+                      f"retry-after={r.headers.get('retry-after')} {'' if r.status_code == 200 else r.text[:140]}",
+                      file=sys.stderr, flush=True)
             if r.status_code == 429:
                 wait = _parse_wait(r.headers.get("retry-after") or r.headers.get("x-ratelimit-reset-tokens"))
+                if "per day" in r.text:
+                    wait = max(wait, LONG_BLOCK + 1)  # daily cap: move to another key/model right away
                 with self.lock:
-                    k.cooldown_until = time.time() + max(wait, 2)
-                    soonest = min(x.cooldown_until for x in self.keys) - time.time()
-                self._settle(entry, est)
-                if soonest > 90:  # all keys blocked for minutes: daily cap, not a per-minute blip
-                    raise QuotaExhausted(soonest)
-                last_err = "rate limited"
-                continue
+                    lane.cooldown_until = time.time() + max(wait, 2)
+                self._settle(lane, entry, 0)
+                last_err = f"rate limited on {lane.model}"
+                continue  # _reserve picks the next best lane, or raises QuotaExhausted if none is left
             if r.status_code >= 500:
-                self._settle(entry, 0)
+                self._settle(lane, entry, 0)
                 last_err = f"{r.status_code} {r.text[:200]}"
                 time.sleep(2 * (attempt + 1))
                 continue
             if r.status_code != 200:
-                self._settle(entry, 0)
+                self._settle(lane, entry, 0)
                 err = r.text[:400]
-                # json_validate_failed: model produced invalid JSON; retry with lower temperature
-                if "json_validate_failed" in err and attempt < 3:
-                    body["temperature"] = 0.1
+                if "json_validate_failed" in err and attempt < 4:  # bad JSON from the model: retry cooler
+                    spec["temperature"] = 0.1
+                    last_err = err
+                    continue
+                if r.status_code in (400, 404) and ("model" in err.lower() or "tools" in err.lower()):
+                    with self.lock:  # this model can't take this request: stop using it for this run
+                        for ln in self.lanes:
+                            if ln.model == lane.model:
+                                ln.cooldown_until = time.time() + 3600
                     last_err = err
                     continue
                 raise LLMError(f"Groq {r.status_code}: {err}")
             data = r.json()
-            self._settle(entry, data.get("usage", {}).get("total_tokens", est))
+            self._settle(lane, entry, data.get("usage", {}).get("total_tokens", est))
             msg = data["choices"][0]["message"]
             if need_content and not (msg.get("content") or "").strip():
-                # ran out of tokens on reasoning; give it more room
-                body["max_completion_tokens"] = int(body["max_completion_tokens"] * 1.6)
+                spec["max_tokens"] = int(spec["max_tokens"] * 1.6)  # spent its budget thinking; give more room
                 last_err = "empty content"
                 continue
             return msg
         raise LLMError(f"Groq call failed after retries: {last_err}")
 
-    def _body(self, messages, max_tokens, reasoning, temperature) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "max_completion_tokens": max_tokens,
-            "temperature": temperature,
-            "include_reasoning": False,
-        }
-        if "gpt-oss" in self.model:
-            body["reasoning_effort"] = reasoning
-        return body
-
-    def chat(
-        self,
-        messages: list[dict],
-        *,
-        max_tokens: int = 1500,
-        reasoning: str = "low",
-        json_mode: bool = False,
-        temperature: float = 0.3,
-    ) -> str:
+    def chat(self, messages: list[dict], *, max_tokens: int = 1500, reasoning: str = "low",
+             json_mode: bool = False, temperature: float = 0.3) -> str:
         est = int(sum(len(m["content"]) for m in messages) / 3.6) + max_tokens
-        body = self._body(messages, max_tokens, reasoning, temperature)
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
-        return self._post(body, est)["content"]
+        spec = {"messages": messages, "max_tokens": max_tokens, "reasoning": reasoning,
+                "temperature": temperature, "json": json_mode}
+        return self._post(spec, est)["content"]
 
     def web_search(self, query: str) -> list[dict]:
-        """Free web search via Groq's built-in browser_search tool. Returns [{url, title}].
-
-        Costs ~1.5-2K Groq tokens per call (the tool output is fed back to the model)
-        but no search-API credits. No snippets are returned, only titles and URLs.
-        """
-        messages = [{"role": "user", "content": f"Run exactly one web search for: {query}\nThen reply only with the word done."}]
-        body = self._body(messages, 300, "low", 0.0)
-        body["tools"] = [{"type": "browser_search"}]
-        msg = self._post(body, 2200, need_content=False)
+        """Web search via Groq's built-in browser_search (gpt-oss models only). Returns [{url, title}].
+        ~1.5-2K tokens per call; no snippets. Raises if no gpt-oss lane is left (caller falls back to Firecrawl)."""
+        spec = {"messages": [{"role": "user", "content": f"Run exactly one web search for: {query}\nThen reply only with the word done."}],
+                "max_tokens": 300, "reasoning": "low", "temperature": 0.0, "tools": [{"type": "browser_search"}]}
+        msg = self._post(spec, 2200, need_content=False)
         out = []
         for t in msg.get("executed_tools") or []:
             sr = t.get("search_results") or {}

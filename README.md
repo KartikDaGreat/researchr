@@ -16,7 +16,7 @@ Every fact carries a confidence score, computed in code from how many independen
 
 ## How it works
 
-A resumable agent pipeline built on Groq's `openai/gpt-oss-20b`:
+A resumable agent pipeline on Groq. It uses `openai/gpt-oss-120b` first and steps down to `gpt-oss-20b`, then `qwen3.8-27b`, when a model's free quota runs out, so runs don't stall:
 
 ```
 identity → plan → search → triage → fetch → extract → snippets → merge → infer → portrait → converse → advise → summarize
@@ -63,9 +63,11 @@ Optionally copy `profile/me.example.json` to `profile/me.json` and fill it in. T
 - Starting research needs a reCAPTCHA v3 pass and is rate-limited.
 - Opening `/?token=<APP_TOKEN>` once turns on owner mode: no captcha or limits, and your own profile is used.
 
-**Limits** (env vars): `RUNS_PER_DAY_TOTAL` (4), `RUNS_PER_USER_PER_DAY` (2), `RUNS_PER_IP_PER_DAY` (3), `MAX_ACTIVE_RUNS` (2). A run uses about 80–110K Groq tokens. The free tier allows 200K/day per key, so the defaults fit two free keys. Raise them on a paid tier.
+**Limits** (env vars): `RUNS_PER_DAY_TOTAL` (12), `RUNS_PER_USER_PER_DAY` (3), `RUNS_PER_IP_PER_DAY` (4), `MAX_ACTIVE_RUNS` (2).
 
-**Tuning:** `MAX_QUERIES` (14), `MAX_PAGES` (12), `MAX_FIRECRAWL_SCRAPES` (3), `USE_FIRECRAWL` (1), `CACHE_DAYS` (7), `STEP_SECONDS` (200), `GROQ_MODEL`, `RESEARCHR_DEBUG=1` to log every model call.
+**Groq quota:** the free tier gives each *account* 8K tokens/min and 200K tokens/day *per model*. It refills continuously, at about 8.3K tokens an hour. Keys on the same account share a quota, so use keys from different accounts. A run uses about 80–110K tokens. With two accounts and three models (`GROQ_MODELS`, tried in order) that's about 1.2M tokens, or roughly 12 runs, a day. Only the gpt-oss models can use Groq's web search, so on qwen, searches go through Firecrawl.
+
+**Tuning:** `MAX_QUERIES` (14), `MAX_PAGES` (12), `MAX_FIRECRAWL_SCRAPES` (3), `USE_FIRECRAWL` (1), `CACHE_DAYS` (7), `STEP_SECONDS` (200), `GROQ_MODELS`, `RESEARCHR_DEBUG=1` to log every model call.
 
 ## Project layout
 

@@ -95,7 +95,8 @@ def to_markdown(r: Report) -> str:
     L += ["", "## Sources", ""]
     L += [f"- [{s.id}] [{s.title or s.url}]({s.url}) · {s.kind}, same-person {pct(s.p_same_person)}" for s in r.sources]
     st = r.stats
-    L += ["", "---", f"*{st.get('searches', 0)} searches · {st.get('pages_read', 0)} pages · {st.get('llm_calls', 0)} LLM calls · "
+    models = ", ".join(m.split("/")[-1] for m in (st.get("models") or {}))
+    L += ["", "---", f"*{('Models: ' + models + '. ') if models else ''}{st.get('searches', 0)} searches · {st.get('pages_read', 0)} pages · {st.get('llm_calls', 0)} LLM calls · "
           f"{st.get('firecrawl_credits', 0)} Firecrawl credits · {st.get('seconds', 0)}s of work. Fact confidence = noisy-OR "
           "over sources (same-person × reliability × verified quote); reads are shrunk toward 50% on thin evidence.*"]
     return "\n".join(L)
@@ -196,7 +197,8 @@ def to_html(r: Report) -> str:
                  f'<span class="muted">{_e(s.domain)} · {s.kind} · same-person {pct(s.p_same_person)}</span></li>')
     H.append("</ol></details></section>")
     st = r.stats
-    H.append(f'<footer>{st.get("searches", 0)} searches · {st.get("pages_read", 0)} pages · {st.get("llm_calls", 0)} LLM calls · '
+    models = ", ".join(m.split("/")[-1] for m in (st.get("models") or {}))
+    H.append(f'<footer>{("Models: " + models + ". ") if models else ""}{st.get("searches", 0)} searches · {st.get("pages_read", 0)} pages · {st.get("llm_calls", 0)} LLM calls · '
              f'{st.get("firecrawl_credits", 0)} Firecrawl credits · {st.get("seconds", 0)}s of work</footer>')
     return REPORT_SHELL.replace("{{title}}", _e(i.canonical_name)).replace("{{body}}", "\n".join(H))
 

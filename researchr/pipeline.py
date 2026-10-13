@@ -664,7 +664,7 @@ class ResearchAgent:
             footprint=footprint(facts, sources), gaps=gaps(facts), sources=sources,
             stats={"searches": st["searches"], "results": len(self.sources),
                    "pages_read": sum(s.fetched for s in self.sources.values()), "raw_facts": len(st["raw_facts"]),
-                   "llm_calls": self.llm.calls, "llm_tokens": self.llm.total_tokens,
+                   "llm_calls": self.llm.calls, "llm_tokens": self.llm.total_tokens, "models": dict(self.llm.by_model),
                    "seconds": round(st.get("work_seconds", 0)), "firecrawl_credits": self.usage.firecrawl_credits,
                    **self.usage.counts},
         )
