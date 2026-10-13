@@ -270,6 +270,9 @@
       return `<li class="phase ${cls}" ${cls === "active" ? 'aria-current="step"' : ""}><span class="ph-name">${p.name}</span><span class="ph-n">${cls ? esc(phaseCount[i]) : ""}</span></li>`;
     }).join("");
 
+    $("#live-foot").textContent = paused
+      ? "Paused runs pick up again when this page is open, so check back in a few minutes."
+      : "It keeps going if you leave. You'll find it under Your people.";
     $("#pbar-fill").style.width = `${Math.max(3, r.pct || 0)}%`;
     $("#pmsg").textContent = r.stage === "queued" ? "Waiting for a free slot" : paused ? r.message : (r.message || "Getting started");
 

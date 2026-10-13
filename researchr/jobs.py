@@ -68,11 +68,17 @@ def tick(rid: str, budget: float, force: bool = False) -> str:
         store.put(_k(rid, "meta"), meta)
         return "queued"
     meta["lease_until"] = now + LEASE_SECONDS
+    if meta.get("stage") == "queued":
+        meta.update(stage="starting", message="Starting")
     store.put(_k(rid, "meta"), meta)
+    last_put = [time.time()]
 
     def emit(stage, msg, pct):
         meta.update(stage=stage, message=msg, pct=round(pct, 1))
         meta["events"] = (meta.get("events", []) + [{"ts": time.time(), "message": msg}])[-15:]
+        if time.time() - last_put[0] > 3:  # long steps still show what they're doing
+            store.put(_k(rid, "meta"), meta)
+            last_put[0] = time.time()
 
     agent = None
 
